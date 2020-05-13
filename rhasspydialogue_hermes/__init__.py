@@ -547,7 +547,7 @@ class DialogueHermesMqtt(HermesClient):
             self, recognition: NluIntentParsed
     ) -> typing.AsyncIterable[
         typing.Union[
-            DialogueIntentNotRecognized, EndSessionType, typing.Tuple[NluIntent, TopicArgs],
+            DialogueIntentNotRecognized, EndSessionType, typing.Tuple[NluIntent, TopicArgs], SoundsType
         ]
     ]:
         """Intent successfully recognized."""
@@ -572,7 +572,13 @@ class DialogueHermesMqtt(HermesClient):
                 _LOGGER.info("Intent confidence is not enough: %f < %f",
                              recognition.intent.confidence_score, self.min_confidence)
 
-                if self.session.session_id == recognition.session_id:
+                # Intent confidence is not enough
+                async for play_error_result in self.maybe_play_sound(
+                        "error", site_id=recognition.site_id
+                ):
+                    yield play_error_result
+
+                if self.session is not None and self.session.session_id == recognition.session_id:
                     if self.session.send_intent_not_recognized:
                         # Client will handle
                         yield DialogueIntentNotRecognized(
