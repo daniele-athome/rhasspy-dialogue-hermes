@@ -24,6 +24,12 @@ def main():
         help="Wakeword ID(s) to listen for (default=all)",
     )
     parser.add_argument(
+        "--min-confidence",
+        type=float,
+        default=0,
+        help="Minimum intent parsing confidence (default: 0)",
+    )
+    parser.add_argument(
         "--session-timeout",
         type=float,
         default=30.0,
@@ -53,6 +59,7 @@ def main():
         client,
         site_ids=args.site_id,
         wakeword_ids=args.wakeword_id,
+        min_confidence=args.min_confidence,
         session_timeout=args.session_timeout,
         sound_paths=sound_paths,
         no_sound=args.no_sound,

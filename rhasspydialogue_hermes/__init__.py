@@ -122,6 +122,7 @@ class DialogueHermesMqtt(HermesClient):
         sound_paths: typing.Optional[typing.Dict[str, Path]] = None,
         session_timeout: float = 30.0,
         no_sound: typing.Optional[typing.List[str]] = None,
+        min_confidence: float = 30.0,
     ):
         super().__init__("rhasspydialogue_hermes", client, site_ids=site_ids)
 
@@ -150,6 +151,9 @@ class DialogueHermesMqtt(HermesClient):
 
         # Session timeout
         self.session_timeout = session_timeout
+
+        # Min NLU confidence
+        self.min_confidence = min_confidence
 
         # Async events and ids for specific messages
         self.message_events: typing.Dict[
@@ -543,7 +547,7 @@ class DialogueHermesMqtt(HermesClient):
             self, recognition: NluIntentParsed
     ) -> typing.AsyncIterable[
         typing.Union[
-            typing.Tuple[NluIntent, TopicArgs],
+            DialogueIntentNotRecognized, EndSessionType, typing.Tuple[NluIntent, TopicArgs],
         ]
     ]:
         """Intent successfully recognized."""
@@ -564,23 +568,44 @@ class DialogueHermesMqtt(HermesClient):
 
             _LOGGER.debug("Recognized %s", recognition)
 
-            # intent
-            yield (
-                NluIntent(
-                    input=recognition.input,
-                    id=recognition.id,
-                    site_id=recognition.site_id,
-                    session_id=recognition.session_id,
-                    intent=Intent(
-                        intent_name=recognition.intent.intent_name,
-                        confidence_score=recognition.intent.confidence_score,
+            if recognition.intent.confidence_score < self.min_confidence:
+                _LOGGER.info("Intent confidence is not enough: %f < %f",
+                             recognition.intent.confidence_score, self.min_confidence)
+
+                if self.session.session_id == recognition.session_id:
+                    if self.session.send_intent_not_recognized:
+                        # Client will handle
+                        yield DialogueIntentNotRecognized(
+                            session_id=self.session.session_id,
+                            custom_data=self.session.custom_data,
+                            site_id=recognition.site_id,
+                            input=recognition.input,
+                        )
+                    else:
+                        # End session automatically
+                        async for end_result in self.end_session(
+                                DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED,
+                                site_id=recognition.site_id,
+                        ):
+                            yield end_result
+            else:
+                # intent
+                yield (
+                    NluIntent(
+                        input=recognition.input,
+                        id=recognition.id,
+                        site_id=recognition.site_id,
+                        session_id=recognition.session_id,
+                        intent=Intent(
+                            intent_name=recognition.intent.intent_name,
+                            confidence_score=recognition.intent.confidence_score,
+                        ),
+                        slots=recognition.slots,
+                        asr_tokens=[NluIntent.make_asr_tokens(recognition.input.split())],
+                        raw_input=original_input,
                     ),
-                    slots=recognition.slots,
-                    asr_tokens=[NluIntent.make_asr_tokens(recognition.input.split())],
-                    raw_input=original_input,
-                ),
-                {"intent_name": recognition.intent.intent_name}
-            )
+                    {"intent_name": recognition.intent.intent_name}
+                )
 
         except Exception:
             _LOGGER.exception("handle_recognized")
