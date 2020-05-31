@@ -595,6 +595,12 @@ class DialogueHermesMqtt(HermesClient):
                         ):
                             yield end_result
             else:
+                # forward custom data if it's our session
+                if self.session is not None and self.session.session_id == recognition.session_id:
+                    custom_data = self.session.custom_data
+                else:
+                    custom_data = None
+
                 # intent
                 yield (
                     NluIntent(
@@ -609,7 +615,7 @@ class DialogueHermesMqtt(HermesClient):
                         slots=recognition.slots,
                         asr_tokens=[NluIntent.make_asr_tokens(recognition.input.split())],
                         raw_input=original_input,
-                        custom_data=self.session.custom_data,
+                        custom_data=custom_data,
                     ),
                     {"intent_name": recognition.intent.intent_name}
                 )
