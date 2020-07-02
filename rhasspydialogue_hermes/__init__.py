@@ -793,10 +793,12 @@ class DialogueHermesMqtt(HermesClient):
                 _LOGGER.warning("Ignoring unknown session %s", message.session_id)
                 return
 
-            async for play_recorded_result in self.maybe_play_sound(
-                "recorded", site_id=message.site_id
-            ):
-                yield play_recorded_result
+            if message.wakeword_id:
+                # Presence of wakewordId means request comes from a voice device
+                async for play_recorded_result in self.maybe_play_sound(
+                    "recorded", site_id=message.site_id
+                ):
+                    yield play_recorded_result
 
             async for text_result in self.handle_text_captured(message):
                 yield text_result
