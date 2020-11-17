@@ -578,29 +578,25 @@ class DialogueHermesMqtt(HermesClient):
                 ):
                     yield play_error_result
 
-                if self.session is not None and self.session.session_id == recognition.session_id:
-                    if self.session.send_intent_not_recognized:
-                        # Client will handle
-                        yield DialogueIntentNotRecognized(
-                            session_id=self.session.session_id,
-                            custom_data=self.session.custom_data,
-                            site_id=recognition.site_id,
-                            input=recognition.input,
-                        )
-                    else:
-                        # End session automatically
-                        async for end_result in self.end_session(
-                                DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED,
-                                site_id=recognition.site_id,
-                        ):
-                            yield end_result
-            else:
-                # forward custom data if it's our session
-                if self.session is not None and self.session.session_id == recognition.session_id:
-                    custom_data = self.session.custom_data
+                if site_session.send_intent_not_recognized:
+                    # Client will handle
+                    yield DialogueIntentNotRecognized(
+                        session_id=site_session.session_id,
+                        custom_data=site_session.custom_data,
+                        site_id=recognition.site_id,
+                        input=recognition.input,
+                    )
                 else:
-                    custom_data = None
-
+                    # End session automatically
+                    _LOGGER.debug("Session ended because of unrecognized intent: %s", site_session.session_id)
+                    async for end_result in self.end_session(
+                            DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED,
+                            site_id=recognition.site_id,
+                            session_id=site_session.session_id,
+                            start_next_session=False
+                    ):
+                        yield end_result
+            else:
                 # intent
                 yield (
                     NluIntent(
@@ -615,7 +611,7 @@ class DialogueHermesMqtt(HermesClient):
                         slots=recognition.slots,
                         asr_tokens=[NluIntent.make_asr_tokens(recognition.input.split())],
                         raw_input=original_input,
-                        custom_data=custom_data,
+                        custom_data=site_session.custom_data,
                     ),
                     {"intent_name": recognition.intent.intent_name}
                 )
@@ -669,7 +665,7 @@ class DialogueHermesMqtt(HermesClient):
                     DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED,
                     site_id=not_recognized.site_id,
                     session_id=not_recognized.session_id,
-                    start_next_session=True,
+                    start_next_session=False,
                 ):
                     yield end_result
         except Exception:
