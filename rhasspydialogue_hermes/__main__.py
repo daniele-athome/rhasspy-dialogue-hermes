@@ -39,6 +39,15 @@ def main():
     parser.add_argument(
         "--no-sound", action="append", help="Disable notification sounds for site id"
     )
+    parser.add_argument(
+        "--volume",
+        type=float,
+        help="Volume scalar for feedback sounds (0-1, default: 1)",
+    )
+    parser.add_argument(
+        "--group-separator",
+        help="String that separates site group from the rest of the site id (default: none)",
+    )
 
     hermes_cli.add_hermes_args(parser)
     args = parser.parse_args()
@@ -63,6 +72,8 @@ def main():
         session_timeout=args.session_timeout,
         sound_paths=sound_paths,
         no_sound=args.no_sound,
+        volume=args.volume,
+        group_separator=args.group_separator,
     )
 
     _LOGGER.debug("Connecting to %s:%s", args.host, args.port)

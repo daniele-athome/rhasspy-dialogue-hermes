@@ -1,7 +1,10 @@
 """Hermes MQTT server for Rhasspy Dialogue Mananger"""
 import asyncio
+import audioop
+import io
 import logging
 import typing
+import wave
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,6 +106,7 @@ class SessionInfo:
     # Wake word that activated this session (if any)
     detected: typing.Optional[HotwordDetected] = None
     wakeword_id: str = ""
+    group_id: str = ""
 
 
 # -----------------------------------------------------------------------------
@@ -122,6 +126,8 @@ class DialogueHermesMqtt(HermesClient):
         sound_paths: typing.Optional[typing.Dict[str, Path]] = None,
         session_timeout: float = 30.0,
         no_sound: typing.Optional[typing.List[str]] = None,
+        volume: typing.Optional[float] = None,
+        group_separator: typing.Optional[str] = None,
         min_confidence: float = 30.0,
     ):
         super().__init__("rhasspydialogue_hermes", client, site_ids=site_ids)
@@ -148,6 +154,8 @@ class DialogueHermesMqtt(HermesClient):
         self.wakeword_ids: typing.Set[str] = set(wakeword_ids or [])
         self.sound_paths = sound_paths or {}
         self.no_sound: typing.Set[str] = set(no_sound or [])
+        self.volume = volume
+        self.group_separator = group_separator or ""
 
         # Session timeout
         self.session_timeout = session_timeout
@@ -665,7 +673,7 @@ class DialogueHermesMqtt(HermesClient):
                     DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED,
                     site_id=not_recognized.site_id,
                     session_id=not_recognized.session_id,
-                    start_next_session=False,
+                    start_next_session=True,
                 ):
                     yield end_result
         except Exception:
@@ -678,6 +686,28 @@ class DialogueHermesMqtt(HermesClient):
     ]:
         """Wake word was detected."""
         try:
+            group_id = ""
+
+            if self.group_separator:
+                # Split site_id into <GROUP>[separator]<NAME>
+                site_id_parts = detected.site_id.split(self.group_separator, maxsplit=1)
+                if len(site_id_parts) > 1:
+                    group_id = site_id_parts[0]
+
+            if group_id:
+                # Check if a session from the same group is already active.
+                # If so, ignore this wake up.
+                for session in self.all_sessions.values():
+                    if session.group_id == group_id:
+                        _LOGGER.debug(
+                            "Group %s already has a session (%s). Ignoring wake word detection from %s.",
+                            group_id,
+                            session.site_id,
+                            detected.site_id,
+                        )
+                        return
+
+            # Create new session
             session_id = (
                 detected.session_id or f"{detected.site_id}-{wakeword_id}-{uuid4()}"
             )
@@ -692,6 +722,7 @@ class DialogueHermesMqtt(HermesClient):
                 detected=detected,
                 wakeword_id=wakeword_id,
                 lang=detected.lang,
+                group_id=group_id,
             )
 
             # Play wake sound before ASR starts listening
@@ -930,6 +961,10 @@ class DialogueHermesMqtt(HermesClient):
             _LOGGER.debug("Playing WAV %s", str(wav_path))
             wav_bytes = wav_path.read_bytes()
 
+            if (self.volume is not None) and (self.volume != 1.0):
+                wav_bytes = DialogueHermesMqtt.change_volume(wav_bytes, self.volume)
+
+            # Send messages
             request_id = request_id or str(uuid4())
             finished_event = asyncio.Event()
             finished_id = request_id
@@ -979,3 +1014,43 @@ class DialogueHermesMqtt(HermesClient):
     def valid_session_id(self, session_id: str) -> bool:
         """True if payload session_id matches current session_id."""
         return session_id in self.all_sessions
+
+    # -------------------------------------------------------------------------
+
+    @staticmethod
+    def change_volume(wav_bytes: bytes, volume: float) -> bytes:
+        """Scale WAV amplitude by factor (0-1)"""
+        if volume == 1.0:
+            return wav_bytes
+
+        try:
+            with io.BytesIO(wav_bytes) as wav_in_io:
+                # Re-write WAV with adjusted volume
+                with io.BytesIO() as wav_out_io:
+                    wav_out_file: wave.Wave_write = wave.open(wav_out_io, "wb")
+                    wav_in_file: wave.Wave_read = wave.open(wav_in_io, "rb")
+
+                    with wav_out_file:
+                        with wav_in_file:
+                            sample_width = wav_in_file.getsampwidth()
+
+                            # Copy WAV details
+                            wav_out_file.setframerate(wav_in_file.getframerate())
+                            wav_out_file.setsampwidth(sample_width)
+                            wav_out_file.setnchannels(wav_in_file.getnchannels())
+
+                            # Adjust amplitude
+                            wav_out_file.writeframes(
+                                audioop.mul(
+                                    wav_in_file.readframes(wav_in_file.getnframes()),
+                                    sample_width,
+                                    volume,
+                                )
+                            )
+
+                    wav_bytes = wav_out_io.getvalue()
+
+        except Exception:
+            _LOGGER.exception("change_volume")
+
+        return wav_bytes
